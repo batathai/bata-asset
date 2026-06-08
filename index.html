@@ -160,6 +160,25 @@ body{font-family:var(--sans);background:var(--bg);color:var(--gray1);min-height:
 .nb svg{width:20px;height:20px;}
 
 /* ── TOAST ── */
+
+/* Urovo hardware scanner input */
+#urovo-input {
+  position: fixed; top: -100px; left: 0;
+  width: 1px; height: 1px; opacity: 0;
+  font-size: 16px;
+}
+.scan-active-indicator {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 16px;
+  background: rgba(204,0,0,0.08);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px; color: var(--red); font-weight: 600;
+}
+.scan-active-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--red); animation: blink 1s infinite;
+}
+
 .toast{position:fixed;bottom:90px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--gray1);color:var(--white);border-radius:20px;padding:9px 18px;font-size:13px;font-weight:500;z-index:200;opacity:0;transition:all .25s;white-space:nowrap;pointer-events:none;}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 
@@ -219,6 +238,15 @@ body{font-family:var(--sans);background:var(--bg);color:var(--gray1);min-height:
     <div class="pb-pct" id="pb-pct">0%</div>
     <div class="pb-cnt" id="pb-cnt">0 / 0</div>
   </div>
+
+  <!-- Urovo Hardware Scanner Input -->
+  <input id="urovo-input" type="text" autocomplete="off" autocorrect="off"
+         autocapitalize="off" spellcheck="false"
+         placeholder="" tabindex="-1">
+  <div class="scan-active-indicator">
+    <div class="scan-active-dot"></div>
+    <span>Hardware scanner ready — press trigger button to scan</span>
+  </div>
   <div class="main">
     <div class="sc-card">
       <div class="sc-vp">
@@ -233,7 +261,7 @@ body{font-family:var(--sans);background:var(--bg);color:var(--gray1);min-height:
       </div>
       <div class="sc-foot">
         <div class="sc-dot"></div>
-        <div class="sc-stat">Camera ready — point at QR code on asset label</div>
+        <div class="sc-stat">Camera ready — or use hardware trigger button</div>
       </div>
     </div>
     <div class="man-row">
@@ -289,7 +317,7 @@ body{font-family:var(--sans);background:var(--bg);color:var(--gray1);min-height:
 
 <script>
 // ── CONFIG ──────────────────────────────
-const API = 'YOUR_API_URL'; // replace with your backend URL
+const API = 'https://bata-asset-api-production.up.railway.app'; // replace with your backend URL
 
 // ── MOCK DATA ────────────────────────────
 const DB = {
@@ -315,7 +343,7 @@ function doLogin(){
   S.user=id;S.branch=br;S.sid=Date.now();
   document.getElementById('hinfo').textContent=id+' · '+br;
   document.getElementById('sum-branch').textContent='Branch '+br;
-  go('ss');initCam();updatePB();
+  go('ss');initCam();initUrovoScanner();updatePB();
 }
 function showErr(m){const e=document.getElementById('lerr');e.textContent=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),3000);}
 function doLogout(){
@@ -325,6 +353,67 @@ function doLogout(){
 }
 
 // ── CAMERA ──────────────────────────────
+
+// ── UROVO HARDWARE SCANNER ───────────────────────────────────
+// Urovo DT50 ส่งผลเป็น keystroke + Enter อัตโนมัติ
+// เราใช้ hidden input รับค่า แล้ว process ทันที
+
+let urovoBuffer = '';
+let urovoTimer = null;
+const UROVO_TIMEOUT = 100; // ms ระหว่าง keystrokes ของ scanner
+
+function initUrovoScanner() {
+  const inp = document.getElementById('urovo-input');
+  if (!inp) return;
+
+  // focus hidden input ตลอดเวลาเมื่ออยู่หน้า scanner
+  inp.focus();
+
+  // re-focus เมื่อ click ที่อื่น
+  document.addEventListener('click', (e) => {
+    if (e.target.id !== 'mc' && e.target.id !== 'urovo-input' &&
+        !e.target.closest('.fi') && !e.target.closest('.field')) {
+      setTimeout(() => inp.focus(), 100);
+    }
+  });
+
+  // รับ input จาก hardware scanner
+  inp.addEventListener('input', () => {
+    urovoBuffer += inp.value;
+    inp.value = '';
+
+    // reset timer ทุกครั้งที่ได้ character ใหม่
+    clearTimeout(urovoTimer);
+    urovoTimer = setTimeout(() => {
+      if (urovoBuffer.trim()) {
+        const code = urovoBuffer.trim();
+        urovoBuffer = '';
+        if (!S.cd) {
+          S.cd = true;
+          setTimeout(() => S.cd = false, 2500);
+          scan(code);
+        }
+      }
+    }, UROVO_TIMEOUT);
+  });
+
+  // รับ Enter key (Urovo ส่ง Enter หลังสแกนเสร็จ)
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      clearTimeout(urovoTimer);
+      const code = urovoBuffer.trim();
+      urovoBuffer = '';
+      inp.value = '';
+      if (code && !S.cd) {
+        S.cd = true;
+        setTimeout(() => S.cd = false, 2500);
+        scan(code);
+      }
+      e.preventDefault();
+    }
+  });
+}
+
 function initCam(){
   if(S.scanner)return;
   S.scanner=new Html5Qrcode('qr-reader');
