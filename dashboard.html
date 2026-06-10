@@ -372,17 +372,42 @@ let dashData = null;
 let unmatchedAll = [];
 let mismatchAll = [];
 
+// ── SESSION PERSIST ──────────────────────────────────
+function saveLogin(t, user) {
+  sessionStorage.setItem('bata_hq_session', JSON.stringify({ token: t, user }));
+}
+function restoreLogin() {
+  try {
+    const s = sessionStorage.getItem('bata_hq_session');
+    if (!s) return false;
+    const d = JSON.parse(s);
+    if (!d.token) return false;
+    token = d.token;
+    document.getElementById('sb-user').textContent = d.user;
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
+    return true;
+  } catch(e) { return false; }
+}
+window.addEventListener('load', () => {
+  if (restoreLogin()) loadData();
+});
+
 // ── LOGIN ────────────────────────────────────────────
 async function doLogin() {
-  const id = document.getElementById('l-id').value.trim();
-  const pw = document.getElementById('l-pw').value;
+  const id  = document.getElementById('l-id').value.trim();
+  const pw  = document.getElementById('l-pw').value;
   const err = document.getElementById('l-err');
   err.classList.remove('show');
 
   if (!id || !pw) { err.textContent = 'Please fill in all fields'; err.classList.add('show'); return; }
 
+  const btn = document.querySelector('.btn-login');
+  btn.textContent = 'Signing in...';
+  btn.disabled = true;
+
   try {
-    const res = await fetch(`${API}/auth/login`, {
+    const res = await fetch(API + '/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ employee_id: id, password: pw, branch_id: 'HQ' })
@@ -393,18 +418,23 @@ async function doLogin() {
 
     token = data.token;
     document.getElementById('sb-user').textContent = id;
+    saveLogin(data.token, id);
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app').style.display = 'flex';
     loadData();
   } catch (e) {
     err.textContent = e.message;
     err.classList.add('show');
+  } finally {
+    btn.textContent = 'SIGN IN';
+    btn.disabled = false;
   }
 }
 document.addEventListener('keypress', e => { if (e.key==='Enter') doLogin(); });
 
 function doLogout() {
   token = null;
+  sessionStorage.removeItem('bata_hq_session');
   document.getElementById('login-screen').style.display = 'flex';
   document.getElementById('app').style.display = 'none';
 }
@@ -413,9 +443,14 @@ function authHeader() { return { 'Authorization': `Bearer ${token}`, 'Content-Ty
 
 // ── LOAD DATA ────────────────────────────────────────
 async function loadData() {
+  if (!token) return;
+  document.getElementById('last-updated').textContent = 'Loading...';
   try {
-    const res = await fetch(`${API}/dashboard/summary`, { headers: authHeader() });
-    if (!res.ok) throw new Error('Failed to load');
+    // โหลด dashboard summary จาก API จริง
+    const res = await fetch(API + '/dashboard/summary', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!res.ok) throw new Error('API error ' + res.status);
     dashData = await res.json();
 
     document.getElementById('last-updated').textContent =
@@ -425,51 +460,38 @@ async function loadData() {
     renderBranchOverview();
     renderBranches();
 
-    // load unmatched
-    const ur = await fetch(`${API}/unmatched/pending`, { headers: authHeader() });
-    if (ur.ok) {
-      const ud = await ur.json();
-      unmatchedAll = ud.items || [];
-      renderUnmatched('pending');
-      const pendingCount = unmatchedAll.filter(i => i.status === 'pending').length;
-      const badge = document.getElementById('unmatched-badge');
-      if (pendingCount > 0) { badge.textContent = pendingCount; badge.style.display = 'inline'; }
-      document.getElementById('unmatched-count').textContent = pendingCount + ' pending';
-    }
+    // โหลด unmatched จาก API จริง
+    try {
+      const ur = await fetch(API + '/unmatched/pending', {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      if (ur.ok) {
+        const ud = await ur.json();
+        unmatchedAll = ud.items || [];
+      }
+    } catch(e) { unmatchedAll = []; }
 
-    // mock mismatch data (from scan_logs where serial_match=false)
-    mismatchAll = getMockMismatches();
-    renderMismatch();
-    renderPrintQueue('need_label');
-
-  } catch (e) {
-    // Use mock data for demo
-    dashData = getMockDashboard();
-    renderStats();
-    renderBranchOverview();
-    renderBranches();
-    unmatchedAll = getMockUnmatched();
     renderUnmatched('pending');
-    mismatchAll = getMockMismatches();
+    const pendingCount = unmatchedAll.filter(i => i.status === 'pending').length;
+    const badge = document.getElementById('unmatched-badge');
+    if (pendingCount > 0) { badge.textContent = pendingCount; badge.style.display = 'inline'; }
+    else badge.style.display = 'none';
+    document.getElementById('unmatched-count').textContent = pendingCount + ' pending';
+
+    // mismatch — จาก scan_logs ที่ serial_match = false (ใช้ mock ชั่วคราว รอ endpoint)
+    mismatchAll = [];
     renderMismatch();
     renderPrintQueue('need_label');
-    document.getElementById('last-updated').textContent = 'Demo mode';
+
+  } catch(e) {
+    console.error('loadData error:', e);
+    document.getElementById('last-updated').textContent = 'Error: ' + e.message;
+    showToast('Failed to load data: ' + e.message, 'error');
   }
 }
 
 // ── MOCK DATA ─────────────────────────────────────────
-function getMockDashboard() {
-  return {
-    total_assets: 997,
-    pending_unmatched: 3,
-    sessions: [
-      { session_id:1, session_name:'Q2/2567 Branch 0054011', branch_id:'0054011', audit_date:'2026-06-08', status:'open',  total_assets:42, scanned_count:38, pending_count:4, unmatched_count:1, progress_pct:90.5 },
-      { session_id:2, session_name:'Q2/2567 Branch 0099999', branch_id:'0099999', audit_date:'2026-06-07', status:'closed', total_assets:85, scanned_count:85, pending_count:0, unmatched_count:0, progress_pct:100.0 },
-      { session_id:3, session_name:'Q2/2567 Branch 0068000', branch_id:'0068000', audit_date:'2026-06-06', status:'open',  total_assets:26, scanned_count:18, pending_count:8, unmatched_count:2, progress_pct:69.2 },
-      { session_id:4, session_name:'Q2/2567 Branch 0099994', branch_id:'0099994', audit_date:'2026-06-05', status:'open',  total_assets:60, scanned_count:12, pending_count:48, unmatched_count:0, progress_pct:20.0 },
-    ]
-  };
-}
+function getMockDashboard() { return { total_assets:0, pending_unmatched:0, sessions:[] }; }
 
 // ── PRINT QUEUE DATA ──────────────────────────────────────────
 let printQueue = [
@@ -538,19 +560,8 @@ function printAllQR() {
   showToast('Preparing ' + need.length + ' QR labels for printing...', 'success');
 }
 
-function getMockUnmatched() {
-  return [
-    { id:1, scanned_qr:'SFU99201905001SEQ001', serial_no:'7TK4B63', name_guess:'Dell Monitor 24"', photo_url:null, branch_id:'0054011', scanned_at:'2026-06-08T10:23:00', status:'pending', auditor:'EMP001', hq_note:null },
-    { id:2, scanned_qr:'OLD2015030012SEQ001', serial_no:null, name_guess:'Epson Printer old', photo_url:null, branch_id:'0068000', scanned_at:'2026-06-06T14:11:00', status:'pending', auditor:'EMP001', hq_note:null },
-    { id:3, scanned_qr:'COM012019080003SEQ002', serial_no:'SC02GV0Z', name_guess:'Scanner USB', photo_url:null, branch_id:'0068000', scanned_at:'2026-06-06T15:05:00', status:'matched', auditor:'EMP001', hq_note:'พบใน FA master รหัส COM012019' },
-  ];
-}
-function getMockMismatches() {
-  return [
-    { qr_key:'COM012020020005SEQ001', name:'Dell NB Inspiron 5490-GD-W', serial_master:'4XXFRT2', serial_found:'4XXFR99', branch:'0099999', scanned_at:'2026-06-07T09:15:00', status:'pending' },
-    { qr_key:'COM012022010005SEQ001', name:'Notebook Lenovo ThinkBook 14', serial_master:'MP23RQEV', serial_found:'MP23RQE0', branch:'0054011', scanned_at:'2026-06-08T11:30:00', status:'pending' },
-  ];
-}
+function getMockUnmatched() { return []; }
+function getMockMismatches() { return []; }
 
 // ── RENDER ────────────────────────────────────────────
 function renderStats() {
